@@ -36,9 +36,10 @@ if (!GROQ_API_KEY) {
 }
 
 // --- Initialize Supabase client (if envs exist) ---
-const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
-  : null;
+const supabase =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+    : null;
 
 // --- Initialize Groq client ---
 const groq = new Groq({
@@ -50,21 +51,35 @@ type PortfolioRow = {
   type: string;
   title: string | null;
   content: string;
+  tags: string | null;
+  participant: string | null;
 };
 
 // --- Helper: fetch matching portfolio entries from Supabase ---
 async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
   if (!supabase) {
-    console.warn("[chat route] Supabase client not initialized; skipping knowledge fetch.");
+    console.warn(
+      "[chat route] Supabase client not initialized; skipping knowledge fetch."
+    );
     return [];
   }
 
   try {
+    // escape LIKE wildcards in user query
+    const escaped = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const pattern = `%${escaped}%`;
+
     const { data, error } = await supabase
       .from("portfolio-knowledge")
       .select("*")
       .or(
-        `content.ilike.%${query}%,title.ilike.%${query}%,project.ilike.%${query}%`
+        [
+          `content.ilike.${pattern}`,
+          `title.ilike.${pattern}`,
+          `project.ilike.${pattern}`,
+          `tags.ilike.${pattern}`,
+          `participant.ilike.${pattern}`,
+        ].join(",")
       )
       .limit(8);
 
@@ -130,7 +145,7 @@ export async function POST(req: NextRequest) {
               (row) =>
                 `PROJECT: ${row.project}\nTYPE: ${row.type}\nTITLE: ${
                   row.title ?? "(no title)"
-                }\nCONTENT: ${row.content}`
+                }\nTAGS: ${row.tags ?? "(none)"}\nCONTENT: ${row.content}`
             )
             .join("\n\n---\n\n")
         : "No matching entries found in portfolio_knowledge.";
@@ -202,4 +217,3 @@ ${contextText}
     );
   }
 }
-
