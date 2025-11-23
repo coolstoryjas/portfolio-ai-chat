@@ -111,9 +111,9 @@ ${contextText || "No matching entries found."}
       { role: "user", content: message },
     ];
 
-    // 4. Call Groq
+    // 4. Call Groq with a valid model ID
     const completion = await groq.chat.completions.create({
-      model: "llama-3.1-70b",
+      model: "llama3-8b-8192", // <= important change
       messages: groqMessages,
       temperature: 0.4,
       max_tokens: 350,
@@ -133,10 +133,10 @@ ${contextText || "No matching entries found."}
         },
       }
     );
-  } catch (err) {
+  } catch (err: any) {
     console.error("Chat route error:", err);
     return NextResponse.json(
-      { response: "Server error while generating response." },
+      { response: `Server error: ${String(err)}` },
       {
         status: 500,
         headers: {
