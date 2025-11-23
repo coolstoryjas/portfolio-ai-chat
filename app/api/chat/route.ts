@@ -148,7 +148,7 @@ export async function POST(req: NextRequest) {
                 }\nTAGS: ${row.tags ?? "(none)"}\nCONTENT: ${row.content}`
             )
             .join("\n\n---\n\n")
-        : "No matching entries found in portfolio_knowledge.";
+        : "No matching entries found in portfolio-knowledge.";
 
     // 2. Build system prompt
     const systemPrompt = `
@@ -217,3 +217,4 @@ ${contextText}
     );
   }
 }
+
