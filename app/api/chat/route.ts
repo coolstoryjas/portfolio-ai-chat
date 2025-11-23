@@ -113,7 +113,7 @@ ${contextText || "No matching entries found."}
 
     // 4. Call Groq with a valid model ID
     const completion = await groq.chat.completions.create({
-      model: "4.1", // <= important change
+      model: "llama3-8b-8192", // <= important change
       messages: groqMessages,
       temperature: 0.4,
       max_tokens: 350,
@@ -146,4 +146,5 @@ ${contextText || "No matching entries found."}
     );
   }
 }
+
 
