@@ -56,7 +56,7 @@ type PortfolioRow = {
 };
 
 // --- Helper: fetch matching portfolio entries from Supabase ---
-async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
+async function fetchKnowledge(_query: string): Promise<PortfolioRow[]> {
   if (!supabase) {
     console.warn(
       "[chat route] Supabase client not initialized; skipping knowledge fetch."
@@ -65,23 +65,12 @@ async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
   }
 
   try {
-    // escape LIKE wildcards in user query
-    const escaped = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
-    const pattern = `%${escaped}%`;
-
+    // For now: just grab the first 20 rows, no filter
     const { data, error } = await supabase
       .from("portfolio-knowledge")
       .select("*")
-      .or(
-        [
-          `content.ilike.${pattern}`,
-          `title.ilike.${pattern}`,
-          `project.ilike.${pattern}`,
-          `tags.ilike.${pattern}`,
-          `participant.ilike.${pattern}`,
-        ].join(",")
-      )
-      .limit(8);
+      .order("id", { ascending: true })
+      .limit(20);
 
     if (error) {
       console.error("[chat route] Supabase error:", error);
@@ -217,4 +206,5 @@ ${contextText}
     );
   }
 }
+
 
