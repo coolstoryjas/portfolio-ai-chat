@@ -60,13 +60,26 @@ async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
   }
 
   try {
+    // Use Supabase .or() with ilike filters
+    // Format: "column.operator.pattern,column2.operator.pattern"
+    // Escape special SQL LIKE characters in user query (but keep our % wildcards)
+    const escapedQuery = query.replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const searchPattern = `%${escapedQuery}%`;
+    // Supabase .or() expects: "column.ilike.pattern,column2.ilike.pattern"
+    const orFilter = `content.ilike.${searchPattern},title.ilike.${searchPattern},project.ilike.${searchPattern}`;
+    
     const { data, error } = await supabase
       .from("portfolio_knowledge")
       .select("*")
-      .or(
-        `content.ilike.%${query}%,title.ilike.%${query}%,project.ilike.%${query}%`
-      )
+      .or(orFilter)
       .limit(8);
+
+    if (error) {
+      console.error("[chat route] Supabase error:", error);
+      // Log the filter for debugging
+      console.error("[chat route] Filter used:", orFilter);
+      return [];
+    }
 
     if (error) {
       console.error("[chat route] Supabase error:", error);
@@ -161,7 +174,7 @@ ${contextText}
 
     // 4. Call Groq with a valid model ID
     const completion = await groq.chat.completions.create({
-      model: "llama3-8b-8192", // Groq's Llama 3 8B Instruct-equivalent
+      model: "llama-3.1-8b-instant", // Groq's Llama 3.1 8B Instant model
       messages: groqMessages,
       temperature: 0.3,
       max_tokens: 350,
