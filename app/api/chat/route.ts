@@ -184,6 +184,13 @@ Portfolio knowledge (only source of truth):
 ${contextText}
 `;
 
+    // 3. Prepare messages for Groq
+    const groqMessages: any[] = [
+      { role: "system", content: systemPrompt },
+      ...convo,
+      { role: "user", content: message },
+    ];
+    
     // 4. Call Groq with a valid model ID
     const completion = await groq.chat.completions.create({
       model: "llama-3.1-8b-instant", // Groq's Llama 3 8B Instruct-equivalent
@@ -227,6 +234,7 @@ ${contextText}
     );
   }
 }
+
 
 
 
