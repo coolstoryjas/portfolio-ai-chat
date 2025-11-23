@@ -4,6 +4,21 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
+// --- CORS handler (for cross-domain calls from Orchids) ---
+export async function OPTIONS() {
+  return NextResponse.json(
+    {},
+    {
+      status: 200,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
+      },
+    }
+  );
+}
+
 // --- Initialize Supabase client ---
 const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -21,7 +36,9 @@ async function fetchKnowledge(query: string) {
     const { data, error } = await supabase
       .from("portfolio_knowledge")
       .select("*")
-      .or(`content.ilike.%${query}%,title.ilike.%${query}%,project.ilike.%${query}%`)
+      .or(
+        `content.ilike.%${query}%,title.ilike.%${query}%,project.ilike.%${query}%`
+      )
       .limit(8);
 
     if (error) {
@@ -39,18 +56,33 @@ async function fetchKnowledge(query: string) {
 // --- Main handler ---
 export async function POST(req: NextRequest) {
   try {
-    const { message, history } = await req.json();
+    const { message, history, conversationHistory } = await req.json();
 
-    if (!message) {
-      return NextResponse.json({ response: "No message provided." });
+    if (!message || typeof message !== "string") {
+      return NextResponse.json(
+        { response: "No message provided." },
+        {
+          status: 400,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
     }
+
+    // Normalize conversation history (supports both field names)
+    const convo = Array.isArray(history)
+      ? history
+      : Array.isArray(conversationHistory)
+      ? conversationHistory
+      : [];
 
     // 1. Fetch context from Supabase
     const knowledge = await fetchKnowledge(message);
 
     const contextText = knowledge
       .map(
-        (row) =>
+        (row: any) =>
           `PROJECT: ${row.project}\nTYPE: ${row.type}\nTITLE: ${row.title}\nCONTENT: ${row.content}`
       )
       .join("\n\n---\n\n");
@@ -72,7 +104,7 @@ ${contextText || "No matching entries found."}
     // 3. Prepare conversation history
     const groqMessages: any[] = [
       { role: "system", content: systemPrompt },
-      ...(history || []).map((m: any) => ({
+      ...convo.map((m: any) => ({
         role: m.role === "assistant" ? "assistant" : "user",
         content: m.content,
       })),
@@ -92,12 +124,25 @@ ${contextText || "No matching entries found."}
       "I couldn’t generate a response.";
 
     // 5. Return the correct frontend format
-    return NextResponse.json({ response: aiResponse });
+    return NextResponse.json(
+      { response: aiResponse },
+      {
+        status: 200,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
+    );
   } catch (err) {
-    console.error(err);
+    console.error("Chat route error:", err);
     return NextResponse.json(
       { response: "Server error while generating response." },
-      { status: 500 }
+      {
+        status: 500,
+        headers: {
+          "Access-Control-Allow-Origin": "*",
+        },
+      }
     );
   }
 }
