@@ -61,7 +61,7 @@ async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
 
   try {
     const { data, error } = await supabase
-      .from("portfolio_knowledge")
+      .from("portfolio-knowledge")
       .select("*")
       .or(
         `content.ilike.%${query}%,title.ilike.%${query}%,project.ilike.%${query}%`
@@ -202,3 +202,4 @@ ${contextText}
     );
   }
 }
+
