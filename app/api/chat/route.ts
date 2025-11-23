@@ -4,7 +4,7 @@ import { createClient } from "@supabase/supabase-js";
 
 export const dynamic = "force-dynamic";
 
-// --- CORS handler (for cross-domain calls from Orchids) ---
+// --- CORS handler (for cross-domain calls, e.g. Orchids) ---
 export async function OPTIONS() {
   return NextResponse.json(
     {},
@@ -19,19 +19,46 @@ export async function OPTIONS() {
   );
 }
 
-// --- Initialize Supabase client ---
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// --- Environment variables ---
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// --- Initialize Groq ---
+// Log once at module load so you see issues in Vercel logs
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  console.warn(
+    "[chat route] Supabase env vars missing. Check NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY."
+  );
+}
+
+if (!GROQ_API_KEY) {
+  console.warn("[chat route] GROQ_API_KEY is missing.");
+}
+
+// --- Initialize Supabase client (if envs exist) ---
+const supabase = SUPABASE_URL && SUPABASE_ANON_KEY
+  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY)
+  : null;
+
+// --- Initialize Groq client ---
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY!,
+  apiKey: GROQ_API_KEY || "",
 });
 
-// --- Helper: fetch matching portfolio entries ---
-async function fetchKnowledge(query: string) {
+type PortfolioRow = {
+  project: string;
+  type: string;
+  title: string | null;
+  content: string;
+};
+
+// --- Helper: fetch matching portfolio entries from Supabase ---
+async function fetchKnowledge(query: string): Promise<PortfolioRow[]> {
+  if (!supabase) {
+    console.warn("[chat route] Supabase client not initialized; skipping knowledge fetch.");
+    return [];
+  }
+
   try {
     const { data, error } = await supabase
       .from("portfolio_knowledge")
@@ -42,13 +69,13 @@ async function fetchKnowledge(query: string) {
       .limit(8);
 
     if (error) {
-      console.error("Supabase error:", error);
+      console.error("[chat route] Supabase error:", error);
       return [];
     }
 
-    return data || [];
+    return (data as PortfolioRow[]) || [];
   } catch (err) {
-    console.error("Knowledge fetch failed:", err);
+    console.error("[chat route] Knowledge fetch failed:", err);
     return [];
   }
 }
@@ -56,95 +83,122 @@ async function fetchKnowledge(query: string) {
 // --- Main handler ---
 export async function POST(req: NextRequest) {
   try {
-    const { message, history, conversationHistory } = await req.json();
-
-    if (!message || typeof message !== "string") {
+    if (!GROQ_API_KEY) {
       return NextResponse.json(
-        { response: "No message provided." },
+        { response: "Server misconfigured: GROQ_API_KEY is not set." },
         {
-          status: 400,
-          headers: {
-            "Access-Control-Allow-Origin": "*",
-          },
+          status: 500,
+          headers: { "Access-Control-Allow-Origin": "*" },
         }
       );
     }
 
-    // Normalize conversation history (supports both field names)
-    const convo = Array.isArray(history)
-      ? history
-      : Array.isArray(conversationHistory)
-      ? conversationHistory
+    const body = await req.json().catch(() => null);
+
+    if (!body || typeof body.message !== "string") {
+      return NextResponse.json(
+        { response: "No message provided." },
+        {
+          status: 400,
+          headers: { "Access-Control-Allow-Origin": "*" },
+        }
+      );
+    }
+
+    const message: string = body.message;
+    const historyRaw = Array.isArray(body.history)
+      ? body.history
+      : Array.isArray(body.conversationHistory)
+      ? body.conversationHistory
       : [];
+
+    // Normalize history into { role, content } pairs
+    const convo = historyRaw
+      .map((m: any) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: String(m.content ?? ""),
+      }))
+      .filter((m: { content: string }) => m.content.trim().length > 0);
 
     // 1. Fetch context from Supabase
     const knowledge = await fetchKnowledge(message);
 
-    const contextText = knowledge
-      .map(
-        (row: any) =>
-          `PROJECT: ${row.project}\nTYPE: ${row.type}\nTITLE: ${row.title}\nCONTENT: ${row.content}`
-      )
-      .join("\n\n---\n\n");
+    const contextText =
+      knowledge.length > 0
+        ? knowledge
+            .map(
+              (row) =>
+                `PROJECT: ${row.project}\nTYPE: ${row.type}\nTITLE: ${
+                  row.title ?? "(no title)"
+                }\nCONTENT: ${row.content}`
+            )
+            .join("\n\n---\n\n")
+        : "No matching entries found in portfolio_knowledge.";
 
     // 2. Build system prompt
     const systemPrompt = `
 You are an AI assistant for Jasmine’s UX portfolio.
-Your job is to give short, grounded answers (2–4 sentences).
-Base EVERYTHING you say ONLY on the Supabase knowledge provided.
-If something is missing, say:
-"I don’t have data on that yet, but here’s a related project…" and pick the closest match.
 
-Never hallucinate. Never invent case studies, roles, or details not explicitly in the dataset.
+Your job:
+- Give short, grounded answers (2–4 sentences).
+- Base EVERYTHING you say ONLY on the Supabase portfolio knowledge provided.
+- If you don’t have enough information, say:
+  "I don’t have data on that yet, but here’s a related project…" and choose the closest match.
+
+Never hallucinate new case studies, roles, companies, or metrics.
+If something isn’t in the data, say so clearly.
 
 Here is the portfolio knowledge you can use:
-${contextText || "No matching entries found."}
+${contextText}
 `;
 
-    // 3. Prepare conversation history
+    // 3. Prepare messages for Groq
     const groqMessages: any[] = [
       { role: "system", content: systemPrompt },
-      ...convo.map((m: any) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content,
-      })),
+      ...convo,
       { role: "user", content: message },
     ];
 
     // 4. Call Groq with a valid model ID
     const completion = await groq.chat.completions.create({
-      model: "llama3-8b-8192", // <= important change
+      model: "llama3-8b-8192", // Groq's Llama 3 8B Instruct-equivalent
       messages: groqMessages,
-      temperature: 0.4,
+      temperature: 0.3,
       max_tokens: 350,
     });
 
-    const aiResponse =
-      completion.choices?.[0]?.message?.content ||
-      "I couldn’t generate a response.";
+    const content =
+      completion.choices?.[0]?.message?.content?.trim() ?? "";
 
-    // 5. Return the correct frontend format
+    const aiResponse =
+      content.length > 0
+        ? content
+        : "I couldn’t generate a response based on the current portfolio data.";
+
+    // 5. Return in the shape your frontend expects
     return NextResponse.json(
       { response: aiResponse },
       {
         status: 200,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-        },
+        headers: { "Access-Control-Allow-Origin": "*" },
       }
     );
   } catch (err: any) {
-    console.error("Chat route error:", err);
+    console.error("[chat route] Fatal error:", err);
+
+    const msg =
+      err instanceof Error
+        ? err.message
+        : typeof err === "string"
+        ? err
+        : "Unknown error";
+
     return NextResponse.json(
-      { response: `Server error: ${String(err)}` },
+      { response: `Server error in chat route: ${msg}` },
       {
         status: 500,
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-        },
+        headers: { "Access-Control-Allow-Origin": "*" },
       }
     );
   }
 }
-
-
